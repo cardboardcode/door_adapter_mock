@@ -1,3 +1,17 @@
+# Copyright 2024 Bey Hao Yun, Gary.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import sys
 import yaml
 import argparse
@@ -6,7 +20,7 @@ import time
 import threading
 
 import rclpy
-from DoorClientAPI import DoorClientAPI
+from door_adapter_mock.DoorClientAPI import DoorClientAPI
 from rclpy.node import Node
 from rmf_door_msgs.msg import DoorRequest, DoorState, DoorMode
 
@@ -28,8 +42,9 @@ class Door:
 
 ###############################################################################
 
+
 class DoorAdapter(Node):
-    def __init__(self,config_yaml):
+    def __init__(self, config_yaml):
         super().__init__('door_adapter')
         self.get_logger().info('Starting door adapter...')
 
@@ -49,16 +64,9 @@ class DoorAdapter(Node):
             # Keep track of doors
             self.doors = {}
             for door_id, door_data in config_yaml['doors'].items():
-                # We support both door_auto_closes and the deprecated
-                # door_close_feature for backward compatibility
-                auto_close = door_data.get('door_auto_closes', None)
-                if auto_close is None:
-                    if 'door_close_feature' in door_data:
-                        auto_close = not door_data['door_close_feature']
-                assert auto_close is not None
-
+                print(f"door_data = {door_data}")
                 self.doors[door_id] = Door(door_id,
-                                           auto_close,
+                                           door_data['door_auto_closes'],
                                            door_data['door_signal_period'],
                                            door_data.get('continuous_status_polling', False))
 
@@ -74,7 +82,7 @@ class DoorAdapter(Node):
     def door_open_command_request(self, door_data: Door):
         # assume API doesn't have close door API
         # Once the door command is posted to the door API,
-        # the door will be opened and then close after 5 secs    
+        # the door will be opened and then close after 5 secs
         while door_data.open_door:
             success = self.api.open_door(door_data.id)
             if success:
@@ -86,8 +94,8 @@ class DoorAdapter(Node):
     def time_cb(self):
         if self.mock_adapter:
             return
-        for door_id, door_data in self.doors.items():
 
+        for door_id, door_data in self.doors.items():
             if door_data.check_status is not None:
                 # If continuous_status_polling is enabled, we will only update
                 # the door state when there is a door open request. If there is
@@ -108,10 +116,21 @@ class DoorAdapter(Node):
 
             # publish states of the door
             state_msg.door_name = door_id
+            if door_data.door_mode == DoorMode.MODE_OFFLINE:
+                self.get_logger().info("DoorState = DoorMode.MODE_OFFLINE")
+            elif door_data.door_mode == DoorMode.MODE_CLOSED:
+                self.get_logger().info("DoorState = DoorMode.MODE_CLOSED")
+            elif door_data.door_mode == DoorMode.MODE_MOVING:
+                self.get_logger().info("DoorState = DoorMode.MODE_MOVING")
+            elif door_data.door_mode == DoorMode.MODE_OPEN:
+                self.get_logger().info("DoorState = DoorMode.MODE_OPEN")
+            else:
+                self.get_logger().info("DoorState = DoorMode.MODE_UNKNOWN")
             state_msg.current_mode.value = door_data.door_mode
             self.door_states_pub.publish(state_msg)
 
     def door_request_cb(self, msg: DoorRequest):
+        self.get_logger().info(f"door_request_cb TRIGGERED... msg = {msg}")
         # Agree to every request automatically if this is a mock adapter
         if self.mock_adapter:
             state_msg = DoorState()
@@ -130,8 +149,8 @@ class DoorAdapter(Node):
         # command to API. When the adapter receives a close request, it will
         # stop sending the open command to API
         self.get_logger().info(
-            f"[{msg.door_name}] Door mode [{msg.requested_mode.value}] '
-            f'requested by {msg.requester_id}"
+            f"[{msg.door_name}] Door mode [{msg.requested_mode.value}] "
+            f"requested by {msg.requester_id}"
         )
         if msg.requested_mode.value == DoorMode.MODE_OPEN:
             # open door implementation
@@ -156,6 +175,7 @@ class DoorAdapter(Node):
             self.get_logger().error('Invalid door mode requested. Ignoring...')
 
 ###############################################################################
+
 
 def main(argv=sys.argv):
     rclpy.init(args=argv)
