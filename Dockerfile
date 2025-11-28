@@ -1,10 +1,11 @@
-FROM ros:humble-ros-base
+FROM ros:jazzy-ros-base
 
 # Install dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ros-humble-rmf-door-msgs \
+        ros-jazzy-rmf-door-msgs \
+        ros-jazzy-rmw-cyclonedds-cpp \
         python3-pip && \
-        pip3 install flask-socketio websockets websocket-client requests && \
+        pip3 install flask-socketio websockets websocket-client requests --break-system-packages && \
     rm -rf /var/lib/apt/lists/*
 
 # Clone the repository

@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 
-docker build -t door_adapter_mock:humble .
+docker build -t door_adapter_mock:jazzy .
