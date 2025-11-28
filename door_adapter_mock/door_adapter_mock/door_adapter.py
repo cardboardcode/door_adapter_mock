@@ -16,59 +16,35 @@ import sys
 import yaml
 import argparse
 
-import time
-import threading
-
 import rclpy
-from door_adapter_mock.DoorClientAPI import DoorClientAPI
 from rclpy.node import Node
 from rmf_door_msgs.msg import DoorRequest, DoorState, DoorMode
 
 
 class Door:
-    def __init__(self,
-                 id,
-                 door_auto_closes,
-                 door_signal_period,
-                 continuous_status_polling):
+    def __init__(self, id):
         self.id = id
         self.door_mode = DoorMode.MODE_CLOSED
-        self.open_door = False
-        self.check_status = None  # set to None if not enabled
-        self.door_auto_closes = door_auto_closes
-        self.door_signal_period = door_signal_period
-        if continuous_status_polling:
-            self.check_status = False
 
 ###############################################################################
 
 
 class DoorAdapter(Node):
     def __init__(self, config_yaml):
-        super().__init__('door_adapter')
-        self.get_logger().info('Starting door adapter...')
+        super().__init__('door_adapter_mock')
+        self.get_logger().info('Initialising [door_adapter_mock]...')
 
         # Get value from config file
         self.door_state_publish_period = config_yaml['door_publisher']['door_state_publish_period']
 
         door_pub = config_yaml['door_publisher']
         door_sub = config_yaml['door_subscriber']
-        self.mock_adapter = config_yaml.get('mock', False)
 
-        # Connect to doors
-        if not self.mock_adapter:
-            self.api = DoorClientAPI(self, config_yaml)
-
-            assert self.api.connected, "Unable to establish connection with door"
-
-            # Keep track of doors
-            self.doors = {}
-            for door_id, door_data in config_yaml['doors'].items():
-                print(f"door_data = {door_data}")
-                self.doors[door_id] = Door(door_id,
-                                           door_data['door_auto_closes'],
-                                           door_data['door_signal_period'],
-                                           door_data.get('continuous_status_polling', False))
+        # Add doors from config.yaml
+        self.doors = {}
+        for door_id in config_yaml['doors']:
+            self.get_logger().info(f"Adding door [{door_id}]...")
+            self.doors[door_id] = Door(door_id)
 
         self.door_states_pub = self.create_publisher(
             DoorState, door_pub['topic_name'], 100)
@@ -77,102 +53,38 @@ class DoorAdapter(Node):
             DoorRequest, door_sub['topic_name'], self.door_request_cb, 100)
 
         self.periodic_timer = self.create_timer(
-            self.door_state_publish_period, self.time_cb)
+            self.door_state_publish_period, self.timer_cb)
 
-    def door_open_command_request(self, door_data: Door):
-        # assume API doesn't have close door API
-        # Once the door command is posted to the door API,
-        # the door will be opened and then close after 5 secs
-        while door_data.open_door:
-            success = self.api.open_door(door_data.id)
-            if success:
-                self.get_logger().info(f"Request to open door [{door_data.id}] is successful")
-            else:
-                self.get_logger().warning(f"Request to open door [{door_data.id}] is unsuccessful")
-            time.sleep(door_data.door_signal_period)
-
-    def time_cb(self):
-        if self.mock_adapter:
-            return
+    def timer_cb(self):
 
         for door_id, door_data in self.doors.items():
-            if door_data.check_status is not None:
-                # If continuous_status_polling is enabled, we will only update
-                # the door state when there is a door open request. If there is
-                # a close door request and the door state is closed, we will
-                # assume the door state remains closed until the next door open
-                # request. This implementation reduces the number of calls made
-                # during state update.
-                if door_data.check_status:
-                    door_data.door_mode = self.api.get_mode(door_id)
-                    if door_data.door_mode == DoorMode.MODE_CLOSED and not door_data.open_door:
-                        door_data.check_status = False
-            else:
-                # If continuous_status_polling is not enabled, we'll just
-                # update the door state as it is all the time
-                door_data.door_mode = self.api.get_mode(door_id)
             state_msg = DoorState()
             state_msg.door_time = self.get_clock().now().to_msg()
-
-            # publish states of the door
+            # Publish states of the door
             state_msg.door_name = door_id
-            if door_data.door_mode == DoorMode.MODE_OFFLINE:
-                self.get_logger().info("DoorState = DoorMode.MODE_OFFLINE")
-            elif door_data.door_mode == DoorMode.MODE_CLOSED:
-                self.get_logger().info("DoorState = DoorMode.MODE_CLOSED")
-            elif door_data.door_mode == DoorMode.MODE_MOVING:
-                self.get_logger().info("DoorState = DoorMode.MODE_MOVING")
-            elif door_data.door_mode == DoorMode.MODE_OPEN:
-                self.get_logger().info("DoorState = DoorMode.MODE_OPEN")
-            else:
-                self.get_logger().info("DoorState = DoorMode.MODE_UNKNOWN")
             state_msg.current_mode.value = door_data.door_mode
             self.door_states_pub.publish(state_msg)
 
     def door_request_cb(self, msg: DoorRequest):
-        self.get_logger().info(f"door_request_cb TRIGGERED... msg = {msg}")
-        # Agree to every request automatically if this is a mock adapter
-        if self.mock_adapter:
-            state_msg = DoorState()
-            state_msg.door_time = self.get_clock().now().to_msg()
-            state_msg.door_name = msg.door_name
-            state_msg.current_mode.value = msg.requested_mode.value
-            self.door_states_pub.publish(state_msg)
-            return
+        self.get_logger().warn(f"Door Request for [{msg.door_name}] to be mode [{msg.requested_mode.value}] - [TRIGGERED]")
 
-        # Check if this door has been stored in the door adapter. If not, ignore
-        door_data = self.doors.get(msg.door_name)
-        if door_data is None:
-            return
+        # Determine that requested door exists
+        is_door_in_list = False
+        for door_id, door_data in self.doors.items():
+            if door_id == msg.door_name:
+                is_door_in_list = True
+                break
 
-        # When the adapter receives an open request, it will send an open
-        # command to API. When the adapter receives a close request, it will
-        # stop sending the open command to API
-        self.get_logger().info(
-            f"[{msg.door_name}] Door mode [{msg.requested_mode.value}] "
-            f"requested by {msg.requester_id}"
-        )
-        if msg.requested_mode.value == DoorMode.MODE_OPEN:
-            # open door implementation
-            door_data.open_door = True
-            if door_data.check_status is not None:
-                # If check_status is enabled, we toggle it to true to allow
-                # door state updates
-                door_data.check_status = True
-            if not door_data.door_auto_closes:
-                self.api.open_door(msg.door_name)
-            else:
-                t = threading.Thread(target=self.door_open_command_request,
-                                     args=(door_data,))
-                t.start()
-        elif msg.requested_mode.value == DoorMode.MODE_CLOSED:
-            # close door implementation
-            door_data.open_door = False
-            self.get_logger().info(f'[{msg.door_name}] Close Command to door received')
-            if not door_data.door_auto_closes:
-                self.api.close_door(msg.door_name)
+        if not is_door_in_list:
+            self.get_logger().warn(f"Requested door [{msg.door_name}] is not in list...")
+            self.get_logger().debug("Please ensure requested door matches what is defined in config.yaml...")
+            self.get_logger().warn("Ignoring Door Request...")
+            return
         else:
-            self.get_logger().error('Invalid door mode requested. Ignoring...')
+            # Update current door mode to what is being requested.
+            self.doors[msg.door_name].door_mode = msg.requested_mode.value
+            self.get_logger().info(f"Door [{msg.door_name}] is set to mode [{self.doors[msg.door_name].door_mode}] - [SUCCESS]")
+
 
 ###############################################################################
 
@@ -182,7 +94,7 @@ def main(argv=sys.argv):
 
     args_without_ros = rclpy.utilities.remove_ros_args(argv)
     parser = argparse.ArgumentParser(
-        prog="door_adapter",
+        prog="door_adapter_mock",
         description="Configure and spin up door adapter for door ")
     parser.add_argument("-c", "--config_file", type=str, required=True,
                         help="Path to the config.yaml file for this door adapter")

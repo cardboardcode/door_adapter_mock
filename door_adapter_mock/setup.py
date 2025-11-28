@@ -24,8 +24,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'door_adapter_mock_node = door_adapter_mock.door_adapter:main',
-            'mock_door_server = door_adapter_mock.mock_door_server:main'
+            'door_adapter_mock_node = door_adapter_mock.door_adapter:main'
         ],
     },
 )
